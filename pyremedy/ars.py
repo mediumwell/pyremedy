@@ -327,7 +327,7 @@ class ARS(object):
             value_struct = field_value_list.fieldValueList[i].value
             try:
                 entry_values[field_name] = self._extract_field(
-                    schema, field_id, value_struct
+                    schema, entry_id, field_id, value_struct
                 )
             except ARSError:
                 self.arlib.FreeAREntryIdList(byref(entry_id_list), arh.FALSE)
@@ -532,7 +532,7 @@ class ARS(object):
                 # Extract the appropriate piece of data depending on its type
                 try:
                     entry_values[field_name] = self._extract_field(
-                        schema, field_id, value_struct
+                        schema, entry_id, field_id, value_struct
                     )
                 except ARSError:
                     self.arlib.FreeARQualifierStruct(
@@ -1034,12 +1034,29 @@ class ARS(object):
         ]
         self.arlib.ARCreateEntry.restype = c_int
 
+        # ARDecodeDiary
+        self.arlib.ARDecodeDiary.argtypes = [
+            POINTER(arh.ARControlStruct),
+            c_char_p,
+            POINTER(arh.ARDiaryList),
+            POINTER(arh.ARStatusList)
+        ]
+        self.arlib.ARDecodeDiary.restype = c_int
+
         # ARDeleteEntry
         self.arlib.ARDeleteEntry.argtypes = [
             POINTER(arh.ARControlStruct), arh.ARNameType,
             POINTER(arh.AREntryIdList), c_uint, POINTER(arh.ARStatusList)
         ]
         self.arlib.ARDeleteEntry.restype = c_int
+
+        # AREncodeDiary
+        self.arlib.AREncodeDiary.argtypes = [
+            POINTER(arh.ARControlStruct),
+            POINTER(arh.ARDiaryList),
+            POINTER(c_char_p),
+            POINTER(arh.ARStatusList)]
+        self.arlib.AREncodeDiary.restype = c_int
 
         # ARGetEntry
         self.arlib.ARGetEntry.argtypes = [
@@ -1134,6 +1151,12 @@ class ARS(object):
         ]
         self.arlib.FreeARBooleanList.restype = None
 
+        # FreeARDiaryList
+        self.arlib.FreeARDiaryList.argtypes = [
+            POINTER(arh.ARDiaryList), arh.ARBoolean
+        ]
+        self.arlib.FreeARDiaryList.restype = None
+
         # FreeAREntryIdList
         self.arlib.FreeAREntryIdList.argtypes = [
             POINTER(arh.AREntryIdList), arh.ARBoolean
@@ -1182,13 +1205,13 @@ class ARS(object):
         ]
         self.arlib.FreeARStatusList.restype = None
 
-    def _extract_field(self, schema, field_id, value_struct):
-        """
-        Returns the appropriate value for the schema and field id requested
+    def _extract_field(self, schema, entry_id, field_id, value_struct):
+        """Returns the appropriate value for the schema and field id requested
         given a particular value structure.
 
         :param str schema: the schema name related to the field you're extract
                            data for
+        :param str entry_id: the entry id of the entry that's retrieved
         :param str field_id: the field id of the schema being retrieved
         :param ARValueStruct value_struct: the Remedy ARValueStruct containing
                                            the data
@@ -1218,11 +1241,43 @@ class ARS(object):
             )
         elif data_type == arh.AR_DATA_TYPE_TIME:
             return datetime.fromtimestamp(value_struct.u.timeVal)
+        elif data_type == arh.AR_DATA_TYPE_DIARY:
+            diary = self._extract_diary(schema, entry_id, field_id, value_struct.u.diaryVal)
+            return diary
         else:
             raise ARSError(
                 'An unknown data type was encountered for field name '
                 '{} on schema {}'.format(field_name, schema)
             )
+
+    def _extract_diary(self, schema, entry_id, field_id, diary_val):
+        diary_list = arh.ARDiaryList()
+        if (
+            self.arlib.ARDecodeDiary(
+                byref(self.control),
+                diary_val,
+                byref(diary_list),
+                byref(self.status)
+            ) >= arh.AR_RETURN_ERROR
+        ):
+            self._update_errors()
+            self.arlib.FreeARDiaryList(diary_list, arh.FALSE)
+            self.arlib.FreeARStatusList(self.status, arh.FALSE)
+            raise ARSError(
+                'Unable to retrieve diary list for field id {} on entry with '
+                'id {} from schema {}'.format(field_id, entry_id, schema)
+            )
+
+        result = []
+
+        for i in range(diary_list.numItems):
+            user = diary_list.diaryList[i].user
+            timeVal = diary_list.diaryList[i].timeVal
+            value = diary_list.diaryList[i].value
+
+            result.append((user, timeVal, value))
+
+        return result
 
     def _update_field(self, schema, field_id, value, field_value_struct):
         """
@@ -1276,11 +1331,60 @@ class ARS(object):
             field_value_struct.value.u.enumVal = enum_id
         elif data_type == arh.AR_DATA_TYPE_TIME:
             field_value_struct.value.u.timeVal = value.strftime('%s')
+        elif data_type == arh.AR_DATA_TYPE_DIARY:
+            field_value_struct.value.u.diaryVal = cast(
+                self.clib.strdup(value), c_char_p
+            )
         else:
             raise ARSError(
                 'An unknown data type was encountered for field name {} '
                 'on schema {}'.format(field_name, schema)
             )
+
+    def _encode_diary(self, entries):
+        """Encode a list of diary entries to an ARDiaryList.
+        Only needed if using ARMergeEntry.
+        :param: entries: list of tuples consisting of (user, timeVal, value).
+            user is the AR user.
+            timeVal is the number of seconds since epoch (1970-01-01 00:00:00 UTC) for this entry.
+            value is the actual message.
+        :return: The encoded diary value string."""
+        diary_list = arh.ARDiaryList()
+        diary_list.numItems = len(entries)
+        diary_list.diaryList = cast(
+            self.clib.malloc(
+                diary_list.numItems * sizeof(arh.ARDiaryStruct)
+            ), POINTER(arh.ARDiaryStruct)
+        )
+
+        for i in range(len(entries)):
+            (user, timeVal, value) = entries[i]
+            diary_list.diaryList[i].user = user
+            diary_list.diaryList[i].timeVal = timeVal
+            diary_list.diaryList[i].value = self.clib.strdup(c_char_p(value))
+
+        out_str = c_char_p(None)
+
+        if (
+            self.arlib.AREncodeDiary(
+                byref(self.control),
+                byref(diary_list),
+                byref(out_str),
+                byref(self.status)
+            ) >= arh.AR_RETURN_ERROR
+        ):
+            self._update_errors()
+            self.arlib.FreeARDiaryList(diary_list, arh.FALSE)
+            self.arlib.FreeARStatusList(self.status, arh.FALSE)
+            raise ARSError(
+                'Unable to encode diary list'
+            )
+
+        result = cast(self.clib.strdup(out_str), c_char_p)
+
+        self.arlib.FreeARDiaryList(diary_list, arh.FALSE)
+        self.arlib.FreeARStatusList(self.status, arh.FALSE)
+        return result
 
     def _update_errors(self, schema=None):
         """
