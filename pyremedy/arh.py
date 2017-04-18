@@ -917,6 +917,18 @@ class ARDiaryLimitsStruct(Structure):
         ('fullTextOptions', c_uint)
     ]
 
+class ARDiaryStruct(Structure):
+    _fields_ = [
+        ('user', ARAccessNameType),
+        ('timeVal', ARTimestamp),
+        ('value', c_char_p)
+    ]
+
+class ARDiaryList(Structure):
+    _fields_ = [
+        ('numItems', c_uint),
+        ('diaryList', POINTER(ARDiaryStruct))
+    ]
 
 class AREnumItemStruct(Structure):
     """Custom enum item (ar.h line 3849)."""
