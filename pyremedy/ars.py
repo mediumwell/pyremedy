@@ -848,6 +848,7 @@ class ARS(object):
         field_name_list = arh.ARNameList()
         field_exist_list = arh.ARBooleanList()
         field_limits_list = arh.ARFieldLimitList()
+        field_id2_list = arh.ARInternalIdList()
 
         if (
             self.arlib.ARGetMultipleFields(
@@ -863,7 +864,7 @@ class ARS(object):
                 byref(field_exist_list),
                 # (return) ARInternalIdList *fieldId2: the internal ids
                 # retrieved
-                None,
+                byref(field_id2_list),
                 # (return) ARNameList *fieldName: the field names
                 byref(field_name_list),
                 # (return) ARFieldMappingList *fieldMap: a mapping to the
@@ -915,6 +916,7 @@ class ARS(object):
             ) >= arh.AR_RETURN_ERROR
         ):
             self._update_errors()
+            self.arlib.FreeARInternalIdList(byref(field_id2_list), arh.FALSE)
             self.arlib.FreeARInternalIdList(byref(field_id_list), arh.FALSE)
             self.arlib.FreeARBooleanList(byref(field_exist_list), arh.FALSE)
             self.arlib.FreeARNameList(byref(field_name_list), arh.FALSE)
@@ -923,6 +925,9 @@ class ARS(object):
                 'Unable to obtain field information for schema '
                 '{}'.format(schema)
             )
+
+        # We actually don't need this information. AR 9.0 just requires us to retrieve it.
+        self.arlib.FreeARInternalIdList(byref(field_id2_list), arh.FALSE)
 
         # Initialise the name and enum caches for this schema
         self.field_id_to_name_cache[schema] = OrderedDict()
