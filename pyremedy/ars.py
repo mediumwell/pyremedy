@@ -849,6 +849,7 @@ class ARS(object):
         field_exist_list = arh.ARBooleanList()
         field_limits_list = arh.ARFieldLimitList()
         field_id2_list = arh.ARInternalIdList()
+        field_data_type_list = arh.ARUnsignedIntList()
 
         if (
             self.arlib.ARGetMultipleFields(
@@ -871,7 +872,7 @@ class ARS(object):
                 # underlying form which to retrieve fields
                 None,
                 # (return) ARUnsignedIntList *dataType: field data types
-                None,
+                byref(field_data_type_list),
                 # (return) ARUnsignedIntList *option: flags indicating whether
                 # users must enter values in the form
                 None,
@@ -916,6 +917,7 @@ class ARS(object):
             ) >= arh.AR_RETURN_ERROR
         ):
             self._update_errors()
+            self.arlib.FreeARUnsignedIntList(byref(field_data_type_list), arh.FALSE)
             self.arlib.FreeARInternalIdList(byref(field_id2_list), arh.FALSE)
             self.arlib.FreeARInternalIdList(byref(field_id_list), arh.FALSE)
             self.arlib.FreeARBooleanList(byref(field_exist_list), arh.FALSE)
@@ -940,7 +942,7 @@ class ARS(object):
             # Save the field name to id mapping in the cache
             field_id = field_id_list.internalIdList[i]
             field_name = field_name_list.nameList[i].value
-            data_type = field_limits_list.fieldLimitList[i].dataType
+            data_type = field_data_type_list.intList[i]
 
             # Save the field id to name mapping in the cache
             self.field_id_to_name_cache[schema][field_id] = field_name
@@ -1005,6 +1007,7 @@ class ARS(object):
                         'is not supported by PyRemedy'.format(field_id, schema)
                     )
 
+        self.arlib.FreeARUnsignedIntList(byref(field_data_type_list), arh.FALSE)
         self.arlib.FreeARInternalIdList(byref(field_id_list), arh.FALSE)
         self.arlib.FreeARBooleanList(byref(field_exist_list), arh.FALSE)
         self.arlib.FreeARNameList(byref(field_name_list), arh.FALSE)
